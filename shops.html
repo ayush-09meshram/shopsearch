@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Item Finder</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        #map { height: 400px; width: 100%; margin-bottom: 10px; }
+        #controls { margin: 10px 0; }
+        #places-table { width: 100%; border-collapse: collapse; }
+        #places-table th, #places-table td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        #places-table th { background: #f4f4f4; }
+        #pagination { margin-top: 10px; }
+        #pagination button { padding: 5px 10px; margin: 2px; }
+    </style>
+</head>
+<body>
+    <h2>Find Nearby Shops for Your Needs</h2>
+    <div id="map"></div>
+    <div id="controls">
+        <input type="text" id="search-box" placeholder="Search grocery, clothing, food..." onkeyup="fetchSearchSuggestions()">
+        <button onclick="searchItems()">Search</button>
+        <select id="sort-options" onchange="sortPlaces()">
+            <option value="distance">Sort by Distance</option>
+            <option value="temperature">Sort by Temperature</option>
+        </select>
+    </div>
+    <table id="places-table">
+        <thead>
+            <tr>
+                <th>Shop Name</th>
+                <th>Address</th>
+                <th>Temperature (°C)</th>
+                <th>Directions</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+    <div id="pagination">
+        <button onclick="prevPage()">&#9665; Prev</button>
+        <span id="page-info">Page 1</span>
+        <button onclick="nextPage()">Next &#9655;</button>
+    </div>
+    
+    <script>
+        let map, userLocation, placesData = [], currentPage = 0, pageSize = 5;
+
+        function initMap() {
+            map = L.map('map').setView([20.5937, 78.9629], 5);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+            
+            navigator.geolocation.getCurrentPosition((position) => {
+                userLocation = [position.coords.latitude, position.coords.longitude];
+                map.setView(userLocation, 13);
+                L.marker(userLocation).addTo(map).bindPopup("You are here").openPopup();
+            });
+        }
+
+        function fetchSearchSuggestions() {
+            let query = document.getElementById("search-box").value;
+            if (!query.trim()) return;
+
+            let url = `https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=5`;
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    console.log("Search Suggestions:", data);
+                })
+                .catch(error => console.error("Error fetching suggestions:", error));
+        }
+
+        function searchItems() {
+            let query = document.getElementById("search-box").value;
+            if (!query.trim()) {
+                alert("Please enter an item to search.");
+                return;
+            }
+
+            let url = `https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=20&lat=${userLocation[0]}&lon=${userLocation[1]}&radius=5000`;
+            
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    placesData = data.map(place => ({
+                        ...place,
+                        distance: calculateDistance(userLocation[0], userLocation[1], place.lat, place.lon),
+                        temperature: (Math.random() * 15 + 15).toFixed(1)
+                    }));
+                    sortPlaces();
+                    updateMapMarkers();
+                })
+                .catch(error => console.error("Error fetching places:", error));
+        }
+        
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return (R * c).toFixed(2);
+        }
+
+        function sortPlaces() {
+            let sortBy = document.getElementById("sort-options").value;
+            if (sortBy === "distance") {
+                placesData.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
+            } else {
+                placesData.sort((a, b) => parseFloat(a.temperature) - parseFloat(b.temperature));
+            }
+            displayPlaces();
+        }
+
+        function displayPlaces() {
+            let tableBody = document.querySelector("#places-table tbody");
+            tableBody.innerHTML = "";
+            let start = currentPage * pageSize;
+            let end = start + pageSize;
+            let paginatedData = placesData.slice(start, end);
+
+            if (paginatedData.length === 0) {
+                tableBody.innerHTML = "<tr><td colspan='4'>No results found</td></tr>";
+                return;
+            }
+
+            paginatedData.forEach(place => {
+                let row = document.createElement("tr");
+                row.innerHTML = `
+                    <td>${place.display_name.split(",")[0]}</td>
+                    <td>${place.display_name}</td>
+                    <td>${place.temperature}°C</td>
+                    <td><a href="https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lon}" target="_blank">Directions</a></td>
+                `;
+                tableBody.appendChild(row);
+            });
+            document.getElementById("page-info").innerText = `Page ${currentPage + 1} of ${Math.ceil(placesData.length / pageSize)}`;
+        }
+
+        function updateMapMarkers() {
+            map.eachLayer(layer => {
+                if (!!layer.toGeoJSON) {
+                    map.removeLayer(layer);
+                }
+            });
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+            
+            placesData.forEach(place => {
+                L.marker([place.lat, place.lon]).addTo(map)
+                    .bindPopup(`${place.display_name} - ${place.temperature}°C <br> <a href="https://www.google.com/maps/search/?api=1&query=${place.lat},${place.lon}" target="_blank">[Directions]</a>`);
+            });
+        }
+
+        function nextPage() {
+            if ((currentPage + 1) * pageSize < placesData.length) {
+                currentPage++;
+                displayPlaces();
+            }
+        }
+
+        function prevPage() {
+            if (currentPage > 0) {
+                currentPage--;
+                displayPlaces();
+            }
+        }
+        
+        window.onload = initMap;
+    </script>
+</body>
+</html>
